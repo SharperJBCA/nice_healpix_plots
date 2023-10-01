@@ -29,6 +29,6 @@ python setup.py install
 and then you can import the functions using
 
 ```python
-from mollweide.src import plot_mollweide
+from mollweide.mollweide import plot_mollweide
 ```
 For examples of use see the example plots 
