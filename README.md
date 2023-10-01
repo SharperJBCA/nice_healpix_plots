@@ -2,7 +2,7 @@
 
 
 ```python
-src.mollweide
+mollweide.mollweide
 ```
 
 contains two functions for plotting nice "mollweide" projections and "gnomonic" projections with the functions
