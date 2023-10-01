@@ -1,8 +1,10 @@
 # Nicer Mollweide projections
 
-'''python
+
+```python
 src.mollweide
-'''
+```
+
 contains two functions for plotting nice "mollweide" projections and "gnomonic" projections with the functions
 
 > [!python]
