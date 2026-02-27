@@ -38,8 +38,65 @@ def tothetaphi(x,y):
 
 HealpixMap = GenericAlias(np.ndarray, (float,))    
 
+
+class _HealpixViewBase:
+    """Shared helpers for HEALPix-backed WCS views."""
+
+    def _prepare_map_for_reproject(self, m: HealpixMap):
+        """Return a copy of ``m`` with invalid/unseen values masked for reprojection."""
+        m_clean = np.array(m, copy=True)
+        invalid = (~np.isfinite(m_clean)) | (m_clean == hp.UNSEEN) | (np.abs(m_clean) > 1e10) | (m_clean < -1e20)
+        m_clean[invalid] = hp.UNSEEN
+        return m_clean
+
+    def _reproject_healpix(self, m: HealpixMap, wcs: WCS, shape_out, interpolation=None):
+        """Reproject a HEALPix map into a target WCS."""
+        interp = interpolation or self.interpolation
+        map_clean = self._prepare_map_for_reproject(m)
+        array, footprint = reproject_from_healpix(
+            (map_clean, 'galactic'),
+            wcs,
+            shape_out=shape_out,
+            nested=False,
+            order=interp,
+        )
+        array[(array == hp.UNSEEN) | (~np.isfinite(array)) | (np.abs(array) > 1e10)] = np.nan
+        return array, footprint
+
+    def _resolve_vmin_vmax(self, array, vmin, vmax):
+        """Resolve numeric and percentile-style vmin/vmax values."""
+        def _resolve(value):
+            if isinstance(value, str):
+                text = value.strip()
+                if text.endswith('%'):
+                    text = text[:-1]
+                if text.lower().startswith('p'):
+                    text = text[1:]
+                return np.nanpercentile(array, float(text))
+            return value
+
+        return _resolve(vmin), _resolve(vmax)
+
+    def _build_norm(self, array, vmin, vmax, asinh=False, norm_mode=None):
+        """Build a matplotlib/astropy normalization object."""
+        if asinh:
+            return ImageNormalize(array, interval=ManualInterval(vmin=vmin, vmax=vmax), stretch=AsinhStretch(a=0.1))
+        if norm_mode in (None, 'linear'):
+            return ImageNormalize(array, interval=ManualInterval(vmin=vmin, vmax=vmax), stretch=LinearStretch())
+        if norm_mode == 'hist':
+            finite = array[np.isfinite(array)]
+            return ImageNormalize(array, interval=MinMaxInterval(), stretch=HistEqStretch(finite if finite.size else np.array([0.0])))
+        return simple_norm(array, norm_mode, min_cut=vmin, max_cut=vmax)
+
+    def _imshow(self, array, cmap=None, interpolation='nearest', vmin=None, vmax=None, asinh=False, norm_mode=None):
+        """Consistent imshow wrapper across projections."""
+        vmin, vmax = self._resolve_vmin_vmax(array, vmin, vmax)
+        norm = self._build_norm(array, vmin=vmin, vmax=vmax, asinh=asinh, norm_mode=norm_mode)
+        self.img = self.axes.imshow(array, cmap=cmap, norm=norm, interpolation=interpolation, origin='lower')
+        return self.img
+
 @dataclass 
-class Mollview:
+class Mollview(_HealpixViewBase):
     
     map : HealpixMap = field(default_factory=lambda : np.zeros(1)) 
     wcs : WCS = field(default_factory=lambda : WCS(naxis=2)) 
@@ -92,27 +149,12 @@ class Mollview:
         """
         
         # now reproject
-        array, footprint = reproject_from_healpix((m,'galactic'), self.wcs,
-                                                  shape_out=[self.Ny,self.Nx],
-                                                  nested=False,order=self.interpolation)
-        array[array < -1e20] = np.nan
+        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
         #pyplot.subplot(111,projection=self.wcs,frame_class=EllipticalFrame)
         #pyplot.imshow(array, interpolation='nearest',cmap=cmap)
         #pyplot.savefig('test.png')
         #pyplot.close()
-        if isinstance(vmax,str):
-            pcent = float(vmax[1:]) 
-            vmax = np.nanpercentile(array,pcent)
-        if isinstance(vmin,str):
-            pcent = float(vmin[1:]) 
-            vmin = np.nanpercentile(array,pcent)
-
-        from astropy.visualization import (ManualInterval,MinMaxInterval, AsinhStretch, SqrtStretch, HistEqStretch, ImageNormalize, LinearStretch)
-        
-        if asinh:
-            norm = ImageNormalize(array, vmin=vmin, vmax=vmax, stretch=AsinhStretch(a=0.1))
-        else:
-            norm = ImageNormalize(array, interval=ManualInterval(vmin=vmin, vmax=vmax), stretch=LinearStretch())
+        vmin, vmax = self._resolve_vmin_vmax(array, vmin, vmax)
 
         if isinstance(figure, type(None)):
             self.figure = pyplot.figure()
@@ -122,9 +164,7 @@ class Mollview:
             self.axes = pyplot.subplot(111,projection=self.wcs,frame_class=EllipticalFrame)
         else:
             self.axes = axes 
-        print(vmin,vmax)
-        print(norm)
-        self.img = self.imshow(array,norm=norm,cmap=cmap,interpolation='nearest')
+        self.img = self._imshow(array, cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax, asinh=asinh, norm_mode=norm)
 
     def remove_ticks(self):
         
@@ -184,26 +224,16 @@ class Mollview:
 
 
     def imshow(self, array,vmin=None,vmax=None,cmap=None,interpolation='nearest', norm='hist'):
-        """Wrapper for matplotlib imshow that allows for different normalisations""" 
-        
-        #array, vmin, vmax, norm_module = self.norm(array, vmin, vmax, norm) 
-        self.img = self.axes.imshow(array,norm=norm,cmap=cmap)#,vmin=vmin,vmax=vmax)
-
-        return self.img 
+        """Backward-compatible wrapper for imshow."""
+        return self._imshow(array, cmap=cmap, interpolation=interpolation, vmin=vmin, vmax=vmax, norm_mode=norm)
     
     def add_contour(self, m,levels=[0.5,1],vmin=None,vmax=None,cmap=None,interpolation='nearest',linewidths=0.5,colors='k'):
-        array, footprint = reproject_from_healpix((m,'galactic'), self.wcs,
-                                                  shape_out=[self.Ny,self.Nx],
-                                                  nested=False,order=self.interpolation)
-        array[(array == hp.UNSEEN) | (np.abs(array) > 1e10)] = np.nan
+        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
         contour = self.axes.contour(array,colors=colors,levels=levels,vmin=vmin,vmax=vmax,linewidths=linewidths)
         return contour
     
     def contourf(self, m,levels=[0.5,1],vmin=None,vmax=None,cmap=None,interpolation='nearest'):
-        array, footprint = reproject_from_healpix((m,'galactic'), self.wcs,
-                                                  shape_out=[self.Ny,self.Nx],
-                                                  nested=False,order=self.interpolation)
-        array[(array == hp.UNSEEN) | (np.abs(array) > 1e10)] = np.nan
+        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
         axes_contour = pyplot.subplot(111,projection=self.wcs,frame_class=EllipticalFrame)
 
         
@@ -241,7 +271,7 @@ class Mollview:
                 
                 
 @dataclass 
-class Gnomview:
+class Gnomview(_HealpixViewBase):
     
     map : HealpixMap = field(default_factory=lambda : np.zeros(1)) 
     wcs : WCS = field(default_factory=lambda : WCS(naxis=2)) 
@@ -313,19 +343,8 @@ class Gnomview:
         """
         
         # now reproject
-        m[m == 0] = hp.UNSEEN
-        m[np.isnan(m)] = hp.UNSEEN 
-        array, footprint = reproject_from_healpix((m,'galactic'), self.wcs,
-                                                  shape_out=[self.Ny,self.Nx],
-                                                  nested=False,order=self.interpolation)
-        array[(array == hp.UNSEEN) | (np.abs(array) > 1e10)] =np.nan
-
-        if isinstance(vmax,str):
-            pcent = float(vmax[1:]) 
-            vmax = np.nanpercentile(array,pcent)
-        if isinstance(vmin,str):
-            pcent = float(vmin[1:]) 
-            vmin = np.nanpercentile(array,pcent)
+        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
+        vmin, vmax = self._resolve_vmin_vmax(array, vmin, vmax)
         
         if isinstance(figure, type(None)):
             self.figure = pyplot.figure()
@@ -340,7 +359,7 @@ class Gnomview:
             print('No data to plot')
             return
 
-        self.img = self.imshow(array,vmin=vmin,vmax=vmax,cmap=cmap,interpolation='nearest', norm=None)
+        self.img = self._imshow(array, cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax, norm_mode=norm)
 
         lon = self.axes.coords[0]
         lat = self.axes.coords[1]
@@ -385,28 +404,19 @@ class Gnomview:
             
     def add_overlay(self, lic, cmap='Greys', alpha=0.5,vmin=None,vmax=None):
         """Add overlay to image"""
-        array, footprint = reproject_from_healpix((lic,'galactic'), self.wcs,
-                                                  shape_out=[self.Ny,self.Nx],
-                                                  nested=False,order=self.interpolation)
-        array[(array == hp.UNSEEN) | (np.abs(array) > 1e10)] = np.nan
+        array, footprint = self._reproject_healpix(lic, self.wcs, [self.Ny, self.Nx], self.interpolation)
 
         print('PLOTTING OVERLAY')
         print(np.nansum(array),np.nanmax(array),np.nanmin(array))
-        self.axes.imshow(array, cmap=cmap, alpha=alpha, origin='lower',vmin=vmin,vmax=vmax)
+        self.axes.imshow(array, cmap=cmap, alpha=alpha, origin='lower', vmin=vmin, vmax=vmax)
 
     def add_contour(self, m,levels=[0.5,1],vmin=None,vmax=None,cmap=None,interpolation='nearest',linewidths=0.5,colors='k'):
-        array, footprint = reproject_from_healpix((m,'galactic'), self.wcs,
-                                                  shape_out=[self.Ny,self.Nx],
-                                                  nested=False,order=self.interpolation)
-        array[(array == hp.UNSEEN) | (np.abs(array) > 1e10)] = np.nan
+        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
         contour = self.axes.contour(array,colors=colors,levels=levels,vmin=vmin,vmax=vmax,linewidths=linewidths)
         return contour
 
     def contourf(self, m,vmin=None,vmax=None,cmap=None,levels=[0,1],interpolation='nearest',alpha=0.5):
-        array, footprint = reproject_from_healpix((m,'galactic'), self.wcs,
-                                                  shape_out=[self.Ny,self.Nx],
-                                                  nested=False,order=self.interpolation)
-        array[(array == hp.UNSEEN) | (np.abs(array) > 1e10)] = np.nan
+        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
         axes_contour = pyplot.subplot(111,projection=self.wcs)
 
         
@@ -417,12 +427,8 @@ class Gnomview:
 
 
     def imshow(self, array,vmin=None,vmax=None,cmap=None,interpolation='nearest', norm='hist'):
-        """Wrapper for matplotlib imshow that allows for different normalisations""" 
-        
-        array, vmin, vmax, norm_module = self.norm(array, vmin, vmax, norm) 
-        self.img = self.axes.imshow(array,norm=norm_module,cmap=cmap,vmin=vmin,vmax=vmax)
-
-        return self.img 
+        """Backward-compatible wrapper for imshow."""
+        return self._imshow(array, cmap=cmap, interpolation=interpolation, vmin=vmin, vmax=vmax, norm_mode=norm)
     
     def norm(self, array, vmin, vmax, norm):
         """Normalise data""" 
@@ -445,7 +451,7 @@ class Gnomview:
     
 
 @dataclass 
-class Arcview:
+class Arcview(_HealpixViewBase):
     
     map : HealpixMap = field(default_factory=lambda : np.zeros(1)) 
     wcs : WCS = field(default_factory=lambda : WCS(naxis=2)) 
@@ -497,22 +503,8 @@ class Arcview:
         """
         
         # now reproject
-        m[m == 0] = hp.UNSEEN
-        m[np.isnan(m)] = hp.UNSEEN 
-        array, footprint = reproject_from_healpix((m,'galactic'), self.wcs,
-                                                  shape_out=[self.Ny,self.Nx],
-                                                  nested=False,order=self.interpolation)
-        array[(array == hp.UNSEEN) | (np.abs(array) > 1e10)] =np.nan
-        if isinstance(vmax,str):
-            pcent = float(vmax[1:]) 
-            self.vmax = np.nanpercentile(array,pcent)
-        else:
-            self.vmax = vmax
-        if isinstance(vmin,str):
-            pcent = float(vmin[1:]) 
-            self.vmin = np.nanpercentile(array,pcent)
-        else:
-            self.vmin = vmin
+        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
+        self.vmin, self.vmax = self._resolve_vmin_vmax(array, vmin, vmax)
 
         
         if isinstance(figure, type(None)):
@@ -529,7 +521,7 @@ class Arcview:
             print('No data to plot')
             return
 
-        self.img = self.imshow(array,vmin=self.vmin,vmax=self.vmax,cmap=cmap,interpolation='nearest', norm=None)
+        self.img = self._imshow(array, cmap=cmap, interpolation='nearest', vmin=self.vmin, vmax=self.vmax, norm_mode=norm)
         # Clip the image to the frame
         self.img.set_clip_path(self.axes.coords.frame.patch)
 
@@ -573,10 +565,7 @@ class Arcview:
             cb.set_label(unit_label)
 
     def contourf(self, m,levels=[0.5,1],vmin=None,vmax=None,cmap=None,interpolation='nearest'):
-        array, footprint = reproject_from_healpix((m,'galactic'), self.wcs,
-                                                  shape_out=[self.Ny,self.Nx],
-                                                  nested=False,order=self.interpolation)
-        array[(array == hp.UNSEEN) | (np.abs(array) > 1e10)] = np.nan
+        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
         axes_contour = pyplot.subplot(111,projection=self.wcs,frame_class=EllipticalFrame)
 
         
@@ -587,12 +576,47 @@ class Arcview:
 
 
     def imshow(self, array,vmin=None,vmax=None,cmap=None,interpolation='nearest', norm='hist'):
-        """Wrapper for matplotlib imshow that allows for different normalisations""" 
-        
-        array, vmin, vmax, norm_module = self.norm(array, vmin, vmax, norm) 
-        self.img = self.axes.imshow(array,norm=norm_module,cmap=cmap,vmin=vmin,vmax=vmax,origin='lower')
+        """Backward-compatible wrapper for imshow."""
+        return self._imshow(array, cmap=cmap, interpolation=interpolation, vmin=vmin, vmax=vmax, norm_mode=norm)
 
-        return self.img 
+
+@dataclass
+class Cartview(_HealpixViewBase):
+
+    map: HealpixMap = field(default_factory=lambda: np.zeros(1))
+    wcs: WCS = field(default_factory=lambda: WCS(naxis=2))
+    xwidth: float = 360
+    ywidth: float = 180
+    interpolation: str = 'nearest-neighbor'
+
+    crval: list = field(default_factory=lambda: [0, 0])
+    cdelt: list = field(default_factory=lambda: [-1. / 6, 1. / 6])
+    axes: Axes = field(default_factory=lambda: None)
+    figure: Figure = field(default_factory=lambda: None)
+
+    projection: str = 'CAR'
+
+    def __post_init__(self):
+        self.Nx, self.Ny = int(abs(self.xwidth // self.cdelt[0])), int(abs(self.ywidth // self.cdelt[1]))
+        self.wcs.wcs.crpix = [self.Nx // 2, self.Ny // 2]
+        self.wcs.wcs.cdelt = self.cdelt
+        self.wcs.wcs.crval = self.crval
+        self.wcs.wcs.ctype = [f'GLON-{self.projection}', f'GLAT-{self.projection}']
+
+    def __call__(self, m: HealpixMap, axes=None, figure=None, norm: str = None,
+                 asinh: bool = False, vmin: float = None, vmax: float = None, cmap=cm.viridis):
+        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
+        vmin, vmax = self._resolve_vmin_vmax(array, vmin, vmax)
+
+        self.figure = pyplot.figure() if isinstance(figure, type(None)) else figure
+        self.axes = pyplot.subplot(111, projection=self.wcs) if isinstance(axes, type(None)) else axes
+
+        if np.nansum(array) == 0:
+            print('No data to plot')
+            return
+
+        self.img = self._imshow(array, cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax, asinh=asinh, norm_mode=norm)
+        return self.img
     
     def norm(self, array, vmin, vmax, norm):
         """Normalise data""" 
