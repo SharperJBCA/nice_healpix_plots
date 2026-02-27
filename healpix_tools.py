@@ -601,11 +601,19 @@ class Cartview(_HealpixViewBase):
         self.wcs.wcs.crpix = [self.Nx // 2, self.Ny // 2]
         self.wcs.wcs.cdelt = self.cdelt
         self.wcs.wcs.crval = self.crval
-        self.wcs.wcs.ctype = [f'GLON-{self.projection}', f'GLAT-{self.projection}']
+        self.wcs.wcs.ctype = ['GLON-CAR', 'GLAT-CAR']
 
     def __call__(self, m: HealpixMap, axes=None, figure=None, norm: str = None,
                  asinh: bool = False, vmin: float = None, vmax: float = None, cmap=cm.viridis):
-        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
+        m_clean = self._prepare_map_for_reproject(m)
+        array, footprint = reproject_from_healpix(
+            (m_clean, 'galactic'),
+            self.wcs,
+            shape_out=[self.Ny, self.Nx],
+            nested=False,
+            order=self.interpolation,
+        )
+        array[(array == hp.UNSEEN) | (~np.isfinite(array)) | (np.abs(array) > 1e10)] = np.nan
         vmin, vmax = self._resolve_vmin_vmax(array, vmin, vmax)
 
         self.figure = pyplot.figure() if isinstance(figure, type(None)) else figure
@@ -616,8 +624,58 @@ class Cartview(_HealpixViewBase):
             return
 
         self.img = self._imshow(array, cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax, asinh=asinh, norm_mode=norm)
+
+        lon = self.axes.coords[0]
+        lat = self.axes.coords[1]
+        lon.set_axislabel('Galactic Longitude')
+        lat.set_axislabel('Galactic Latitude')
+
         return self.img
-    
+
+    def remove_ticks(self):
+        self.axes.coords[0].set_ticks_visible(False)
+        self.axes.coords[0].set_ticklabel_visible(False)
+        self.axes.coords[1].set_ticks_visible(False)
+        self.axes.coords[1].set_ticklabel_visible(False)
+
+    def remove_xaxis_ticks(self):
+        self.axes.coords[0].set_ticks_visible(False)
+        self.axes.coords[0].set_ticklabel_visible(False)
+
+    def remove_yaxis_ticks(self):
+        self.axes.coords[1].set_ticks_visible(False)
+        self.axes.coords[1].set_ticklabel_visible(False)
+
+    def add_grid(self, color='k'):
+        """Add grid to image."""
+        self.axes.coords.grid(color=color)
+        self.axes.coords['glon'].set_ticklabel(color=color)
+
+    def add_colorbar(self, unit_label=' ', ticks=None):
+        """Add colorbar."""
+        divider = make_axes_locatable(self.axes)
+        cax = divider.append_axes('right', size='5%', pad=0.05, axes_class=pyplot.Axes)
+        if len(self.axes.images) > 0:
+            self.figure.colorbar(self.axes.images[0], ax=self.axes, cax=cax, label=unit_label, ticks=ticks)
+
+    def add_overlay(self, lic, cmap='Greys', alpha=0.5, vmin=None, vmax=None):
+        """Add map overlay to image."""
+        array, footprint = self._reproject_healpix(lic, self.wcs, [self.Ny, self.Nx], self.interpolation)
+        self.axes.imshow(array, cmap=cmap, alpha=alpha, origin='lower', vmin=vmin, vmax=vmax)
+
+    def add_contour(self, m, levels=[0.5, 1], vmin=None, vmax=None, cmap=None,
+                    interpolation='nearest', linewidths=0.5, colors='k'):
+        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
+        contour = self.axes.contour(array, colors=colors, levels=levels, vmin=vmin, vmax=vmax, linewidths=linewidths)
+        return contour
+
+    def contourf(self, m, levels=[0.5, 1], vmin=None, vmax=None, cmap=None, interpolation='nearest'):
+        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
+        contourf = self.axes.contourf(array, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax, alpha=0.5)
+        array[np.isnan(array)] = 0
+        self.axes.contour(array, colors='k', levels=levels, vmin=vmin, vmax=vmax, linewidths=0.5)
+        return contourf
+
     def norm(self, array, vmin, vmax, norm):
         """Normalise data""" 
         

@@ -4,7 +4,7 @@
 Example usage: 
 
 ```python
-from healpix_tools import Mollview, Gnomview, Arcview
+from healpix_tools import Mollview, Gnomview, Arcview, Cartview
 from plotting_tools import MOLLVIEW_FIGSIZE
 from matplotlib import pyplot
 import healpy as hp 
