@@ -22,7 +22,7 @@ from astropy.visualization import simple_norm, HistEqStretch
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from astropy.coordinates import SkyCoord
-from plotting_tools import FONT_SIZE_NORMAL
+from .plotting_tools import FONT_SIZE_NORMAL
 
 from reproject import reproject_from_healpix
 from astropy.visualization import (ManualInterval,MinMaxInterval, AsinhStretch, SqrtStretch, HistEqStretch, ImageNormalize, LinearStretch)
