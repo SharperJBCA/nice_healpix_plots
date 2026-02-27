@@ -22,6 +22,7 @@ from astropy.visualization import simple_norm, HistEqStretch
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from astropy.coordinates import SkyCoord
+import astropy.units as u
 from plotting_tools import FONT_SIZE_NORMAL
 
 from reproject import reproject_from_healpix
@@ -148,23 +149,26 @@ class Mollview(_HealpixViewBase):
 
         """
         
-        # now reproject
-        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
-        #pyplot.subplot(111,projection=self.wcs,frame_class=EllipticalFrame)
-        #pyplot.imshow(array, interpolation='nearest',cmap=cmap)
-        #pyplot.savefig('test.png')
-        #pyplot.close()
-        vmin, vmax = self._resolve_vmin_vmax(array, vmin, vmax)
+        self.load_data(m)
+        return self.plot_data(axes=axes, figure=figure, norm=norm, asinh=asinh, vmin=vmin, vmax=vmax, cmap=cmap)
 
-        if isinstance(figure, type(None)):
-            self.figure = pyplot.figure()
-        else:
-            self.figure = figure 
-        if isinstance(axes, type(None)):    
-            self.axes = pyplot.subplot(111,projection=self.wcs,frame_class=EllipticalFrame)
-        else:
-            self.axes = axes 
-        self.img = self._imshow(array, cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax, asinh=asinh, norm_mode=norm)
+    def load_data(self, healpix_map: HealpixMap):
+        """Reproject and cache a HEALPix map for plotting."""
+        self.array, self.footprint = self._reproject_healpix(healpix_map, self.wcs, [self.Ny, self.Nx], self.interpolation)
+        return self.array
+
+    def plot_data(self, axes=None, figure=None, norm: str = None, nor: str = None,
+                  asinh: bool = False, vmin: float = None, vmax: float = None, cmap=cm.viridis):
+        """Plot cached data loaded with ``load_data``."""
+        if not hasattr(self, 'array'):
+            raise ValueError('No cached data found. Run load_data(healpix_map) first.')
+        norm = norm if norm is not None else nor
+        vmin, vmax = self._resolve_vmin_vmax(self.array, vmin, vmax)
+
+        self.figure = pyplot.figure() if isinstance(figure, type(None)) else figure
+        self.axes = pyplot.subplot(111, projection=self.wcs, frame_class=EllipticalFrame) if isinstance(axes, type(None)) else axes
+        self.img = self._imshow(self.array, cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax, asinh=asinh, norm_mode=norm)
+        return self.img
 
     def remove_ticks(self):
         
@@ -319,6 +323,7 @@ class Gnomview(_HealpixViewBase):
                  axes = None, 
                  figure = None, 
                  norm : str =None, 
+                 asinh : bool = False,
                  vmin : float =None, vmax : float =None, cmap=cm.viridis): 
         """
         
@@ -342,24 +347,30 @@ class Gnomview(_HealpixViewBase):
 
         """
         
-        # now reproject
-        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
-        vmin, vmax = self._resolve_vmin_vmax(array, vmin, vmax)
-        
-        if isinstance(figure, type(None)):
-            self.figure = pyplot.figure()
-        else:
-            self.figure = figure 
-        if isinstance(axes, type(None)):    
-            self.axes = pyplot.subplot(111,projection=self.wcs)
-        else:
-            self.axes = axes 
+        self.load_data(m)
+        return self.plot_data(axes=axes, figure=figure, norm=norm, asinh=asinh, vmin=vmin, vmax=vmax, cmap=cmap)
 
-        if np.nansum(array) == 0:
+    def load_data(self, healpix_map: HealpixMap):
+        """Reproject and cache a HEALPix map for plotting."""
+        self.array, self.footprint = self._reproject_healpix(healpix_map, self.wcs, [self.Ny, self.Nx], self.interpolation)
+        return self.array
+
+    def plot_data(self, axes=None, figure=None, norm: str = None, nor: str = None,
+                  asinh: bool = False, vmin: float = None, vmax: float = None, cmap=cm.viridis):
+        """Plot cached data loaded with ``load_data``."""
+        if not hasattr(self, 'array'):
+            raise ValueError('No cached data found. Run load_data(healpix_map) first.')
+        norm = norm if norm is not None else nor
+        vmin, vmax = self._resolve_vmin_vmax(self.array, vmin, vmax)
+
+        self.figure = pyplot.figure() if isinstance(figure, type(None)) else figure
+        self.axes = pyplot.subplot(111, projection=self.wcs) if isinstance(axes, type(None)) else axes
+
+        if np.nansum(self.array) == 0:
             print('No data to plot')
             return
 
-        self.img = self._imshow(array, cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax, norm_mode=norm)
+        self.img = self._imshow(self.array, cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax, asinh=asinh, norm_mode=norm)
 
         lon = self.axes.coords[0]
         lat = self.axes.coords[1]
@@ -479,6 +490,7 @@ class Arcview(_HealpixViewBase):
                  axes = None, 
                  figure = None, 
                  norm : str =None, 
+                 asinh : bool = False,
                  vmin : float =None, vmax : float =None, cmap=cm.viridis): 
         """
         
@@ -502,26 +514,34 @@ class Arcview(_HealpixViewBase):
 
         """
         
-        # now reproject
-        array, footprint = self._reproject_healpix(m, self.wcs, [self.Ny, self.Nx], self.interpolation)
-        self.vmin, self.vmax = self._resolve_vmin_vmax(array, vmin, vmax)
+        self.load_data(m)
+        return self.plot_data(axes=axes, figure=figure, norm=norm, asinh=asinh, vmin=vmin, vmax=vmax, cmap=cmap)
 
-        
-        if isinstance(figure, type(None)):
-            self.figure = pyplot.figure()
-        else:
-            self.figure = figure 
-        if isinstance(axes, type(None)):    
-            self.axes = pyplot.subplot(111,projection=self.wcs,frame_class=EllipticalFrame)
+    def load_data(self, healpix_map: HealpixMap):
+        """Reproject and cache a HEALPix map for plotting."""
+        self.array, self.footprint = self._reproject_healpix(healpix_map, self.wcs, [self.Ny, self.Nx], self.interpolation)
+        return self.array
+
+    def plot_data(self, axes=None, figure=None, norm: str = None, nor: str = None,
+                  asinh: bool = False, vmin: float = None, vmax: float = None, cmap=cm.viridis):
+        """Plot cached data loaded with ``load_data``."""
+        if not hasattr(self, 'array'):
+            raise ValueError('No cached data found. Run load_data(healpix_map) first.')
+        norm = norm if norm is not None else nor
+        self.vmin, self.vmax = self._resolve_vmin_vmax(self.array, vmin, vmax)
+
+        self.figure = pyplot.figure() if isinstance(figure, type(None)) else figure
+        if isinstance(axes, type(None)):
+            self.axes = pyplot.subplot(111, projection=self.wcs, frame_class=EllipticalFrame)
             self.axes.coords.frame.set_frame_shape('circle')
         else:
-            self.axes = axes 
+            self.axes = axes
 
-        if np.nansum(array) == 0:
+        if np.nansum(self.array) == 0:
             print('No data to plot')
             return
 
-        self.img = self._imshow(array, cmap=cmap, interpolation='nearest', vmin=self.vmin, vmax=self.vmax, norm_mode=norm)
+        self.img = self._imshow(self.array, cmap=cmap, interpolation='nearest', vmin=self.vmin, vmax=self.vmax, asinh=asinh, norm_mode=norm)
         # Clip the image to the frame
         self.img.set_clip_path(self.axes.coords.frame.patch)
 
@@ -605,25 +625,30 @@ class Cartview(_HealpixViewBase):
 
     def __call__(self, m: HealpixMap, axes=None, figure=None, norm: str = None,
                  asinh: bool = False, vmin: float = None, vmax: float = None, cmap=cm.viridis):
-        m_clean = self._prepare_map_for_reproject(m)
-        array, footprint = reproject_from_healpix(
-            (m_clean, 'galactic'),
-            self.wcs,
-            shape_out=[self.Ny, self.Nx],
-            nested=False,
-            order=self.interpolation,
-        )
-        array[(array == hp.UNSEEN) | (~np.isfinite(array)) | (np.abs(array) > 1e10)] = np.nan
-        vmin, vmax = self._resolve_vmin_vmax(array, vmin, vmax)
+        self.load_data(m)
+        return self.plot_data(axes=axes, figure=figure, norm=norm, asinh=asinh, vmin=vmin, vmax=vmax, cmap=cmap)
+
+    def load_data(self, healpix_map: HealpixMap):
+        """Reproject and cache a HEALPix map for plotting."""
+        self.array, self.footprint = self._reproject_healpix(healpix_map, self.wcs, [self.Ny, self.Nx], self.interpolation)
+        return self.array
+
+    def plot_data(self, axes=None, figure=None, norm: str = None, nor: str = None,
+                  asinh: bool = False, vmin: float = None, vmax: float = None, cmap=cm.viridis):
+        """Plot cached data loaded with ``load_data``."""
+        if not hasattr(self, 'array'):
+            raise ValueError('No cached data found. Run load_data(healpix_map) first.')
+        norm = norm if norm is not None else nor
+        vmin, vmax = self._resolve_vmin_vmax(self.array, vmin, vmax)
 
         self.figure = pyplot.figure() if isinstance(figure, type(None)) else figure
         self.axes = pyplot.subplot(111, projection=self.wcs) if isinstance(axes, type(None)) else axes
 
-        if np.nansum(array) == 0:
+        if np.nansum(self.array) == 0:
             print('No data to plot')
             return
 
-        self.img = self._imshow(array, cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax, asinh=asinh, norm_mode=norm)
+        self.img = self._imshow(self.array, cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax, asinh=asinh, norm_mode=norm)
 
         lon = self.axes.coords[0]
         lat = self.axes.coords[1]
